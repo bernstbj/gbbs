@@ -6,6 +6,7 @@ This document describes the message database file format used by GBBS Pro on App
 
 
 **Key Features:**
+
 - **7-bit compression**: Achieves ~12.5% space savings by packing 8 characters into 7 bytes
 - **Block-chained storage**: Messages can span multiple 128-byte blocks via chain pointers
 - **Two distinct formats**: Bulletin boards (public messages) and email (private messages per user)
@@ -13,10 +14,12 @@ This document describes the message database file format used by GBBS Pro on App
 - **Random access**: Directory provides direct access to messages without sequential scanning
 
 **File Types:**
+
 - **Bulletin files** (B1, B2, B3, etc.): Public message boards, one message per directory entry
 - **MAIL file**: Private email, directory entries map to user IDs, multiple messages per user
 
 **Typical Usage:**
+
 - Bulletin boards for public discussions, announcements, and forums
 - MAIL file for private user-to-user communication
 - Messages can be deleted (directory entry removed) but data remains until overwritten
@@ -32,6 +35,7 @@ GBBS Pro message databases come in two formats, distinguished by byte 0 of the h
 Used for public bulletin boards (B1, B2, B3, etc.)
 
 **Characteristics**:
+
 - One message per directory entry
 - Messages terminated by null byte (0x00)
 - Long messages span multiple blocks via chain pointers
@@ -39,6 +43,7 @@ Used for public bulletin boards (B1, B2, B3, etc.)
 - Messages shouldn't share blocks
 
 **Structure**:
+
 - Directory entry points to message start block
 - Follow chain pointers (bytes 126-127) for multi-block messages
 - Stop at null terminator or end of chain
@@ -47,6 +52,7 @@ Used for public bulletin boards (B1, B2, B3, etc.)
 Used for private email/mail databases (MAIL file)
 
 **Characteristics**:
+
 - Directory entries map to User IDs (entry N = User ID N)
 - Each user has a chain of blocks containing all their messages
 - Messages within a user's chain are separated by EOT character (0x04)
@@ -54,6 +60,7 @@ Used for private email/mail databases (MAIL file)
 - 7-bit compression works the same as bulletin format
 
 **Structure**:
+
 - Each directory entry corresponds to a User ID
 - Follow chain pointers to get all blocks for that user
 - Decode the complete chain
@@ -120,6 +127,7 @@ It was difficult to determine from dissecting a database file, so had to look at
 - **Maximum entries**: (MSGINFO[1] × 128) / 4
 
 Each directory entry is 4 bytes:
+
 - **Bytes 0-1**: Byte offset in file where message starts (little-endian, 16-bit)
   - Absolute byte offset from beginning of file
   - Allows direct seeking to message without decoding
@@ -134,6 +142,7 @@ Each directory entry is 4 bytes:
 Empty entries are marked with `00 00 00 00`.
 
 **Important**: 
+
 - **Bulletin format**: Directory entries may point to continuation blocks or message fragments, not always complete message starts. The presence of a non-zero block number indicates the entry is "active" from the BBS perspective.
 - **Email format**: Directory entry N corresponds to User ID N. Non-zero entry means that user has messages.
 
@@ -172,6 +181,7 @@ Block number translation:
 **7-bit compressed** data organized in 128-byte blocks.
 
 #### Structure
+
 - **First message**: May or may not start at the first data block
   - Messages are accessed via directory entries
   - No guaranteed "main" message at a fixed location
@@ -182,6 +192,7 @@ Block number translation:
   - Multiple messages can exist within blocks (though rare in bulletin format)
 
 #### Block Structure (128 bytes each)
+
 - **Bytes 0-125**: Compressed message data (126 bytes)
 - **Bytes 126-127**: Next block pointer (little-endian, 16-bit)
   - Points to next block number in the chain
@@ -191,23 +202,27 @@ Block number translation:
 ### Message Deletion and Recovery
 
 **Deletion Process** (from DISK.S DO_KILL):
+
 1. Directory entry (4 bytes) is zeroed out
 2. Each block in the chain is deallocated in the bitmap
 3. **Data blocks are NOT modified** - chain pointers remain intact
 4. Message content remains in blocks until overwritten
 
 **Crunch Process** (from DISK.S DO_CNCH):
+
 1. Compacts directory by removing zero entries
 2. Moves valid entries forward to fill gaps
 3. **Only touches directory** - never modifies data blocks
 4. Writes compacted directory back to disk
 
 **Why Deleted Messages Are Recoverable:**
+
 - Directory entry removed, but data blocks untouched
 - Chain pointers still valid and can be followed
 - Message content remains until blocks are reused
 
 **Message Reading** (from DISK.S RDMSG):
+
 - Reads 126 bytes of data from current block
 - Checks bytes 126-127 for next block pointer
 - If pointer is 0x0000, end of message
@@ -215,6 +230,7 @@ Block number translation:
 - **NO loop detection** - self-referencing pointers cause infinite loop/hang
 
 **Self-Referencing Chain Pointers** (block N -> block N):
+
 - NOT created intentionally by GBBS software
 - NOT handled by GBBS - causes infinite loop/hang if encountered
 - Result of **corruption or buffer reuse without proper initialization**
@@ -222,6 +238,7 @@ Block number translation:
 - Old chain pointers can remain if new message is shorter
 
 **Self-Reference as Sequential Continuation Pattern:**
+
 - Analysis of B2 database shows 35 out of 39 self-referencing pointers have valid continuations in the next sequential block (block N+1)
 - Pattern: Block N -> N (self-reference) actually means "continue to block N+1"
 - Likely caused by systematic bug in GBBS where current block number is written instead of next block number
@@ -235,12 +252,14 @@ Block number translation:
 - Acts as a marker for corrupted/incomplete message chains
 
 **Chain Pointer Corruption Causes:**
+
 1. **Buffer reuse**: BLKBUF2 not cleared between messages, old chain data remains
 2. **Incomplete writes**: Disk errors during block write operations
 3. **Block reuse**: Previously used blocks allocated without initialization
 4. **Software bugs**: Edge cases in message writing not properly handled
 
 **Orphaned Blocks:**
+
 - Continuation blocks from deleted messages
 - Start block may be reused for new message, but continuations remain
 - No directory entry points to them
@@ -248,10 +267,12 @@ Block number translation:
 
 #### Byte Offset vs Block Number
 The directory stores both for flexibility:
+
 - **Byte offset** (bytes 0-1): Absolute position in file for direct seeking
 - **Block number** (bytes 2-3): Block-based addressing for chained reading
 
 Example from B1:
+
 - Directory entry 0: byte offset 1133, block 54
   - Block 54 is at file offset: 0x508 + ((54-1) × 128) = 0x1A88
   - Byte offset 1133 = 0x046D (may point mid-block for random access)
@@ -294,6 +315,7 @@ Result: 7 bytes encode "PRESUMED" (8 characters)
 The ACOS code (DISK.S, RDMSG function) decodes as follows:
 
 For each byte in the compressed data:
+
 1. `ASL` - Shift byte left, bit 7 goes to carry flag
 2. `ROR CHAR8` - Rotate CHAR8 right, carry goes into bit 7 of CHAR8
 3. `LSR` - Shift accumulator right (gives original byte with bit 7 cleared)
@@ -332,6 +354,7 @@ def decode_7bit(compressed_data, stop_at_null=True):
 ```
 
 **Key points:**
+
 - Processes 7 bytes at a time to produce 8 characters
 - `stop_at_null` parameter controls whether to stop at null terminator (used for bulletin format)
 - Converts carriage returns (\r) to newlines (\n) for Unix compatibility
@@ -353,6 +376,7 @@ def decode_7bit(compressed_data, stop_at_null=True):
 
 ## Block Chaining Example
 Message starting at block 7:
+
 - Block 7: Contains message data, bytes 126-127 = `09 00` (next block = 9)
 - Block 9: Contains continuation, bytes 126-127 = `00 00` (end of message)
 
@@ -384,6 +408,7 @@ do you have to keep on doing that?
 ```
 
 **Field Descriptions:**
+
 - **Subject**: First line of message (any text)
 - **To**: Line 2 - User ID, username (0 = "All" for public messages)
 - **From**: Line 3 - User ID, username with ID in parentheses
@@ -391,6 +416,7 @@ do you have to keep on doing that?
 - **Body**: Remaining lines - Message content (may span multiple blocks)
 
 **Message Start Pattern** (used by gbbsmsgtool.py to identify message starts):
+
 - Line 1: Any text (subject)
 - Line 2: Matches pattern `^\d+,` (number, comma, text)
 - Line 3: Matches pattern `^\d+,` (number, comma, text)
@@ -420,6 +446,7 @@ Hey, just testing the mail system...
 ```
 
 **Field Descriptions:**
+
 - **From User ID**: Line 1 - Numeric user ID of sender
 - **Subject**: Line 2 - Subject line with "Subj :" prefix
 - **From**: Line 3 - Sender's username with ID in parentheses
@@ -529,6 +556,7 @@ The complete message extraction process:
 Consolidated tool for analyzing and extracting messages from GBBS Pro message database files.
 
 **Key Features:**
+
 - Auto-detects bulletin vs email format (byte 0 of header)
 - Handles both bulletin board and email (MAIL) databases
 - Optional USERS file support for email recipient names
@@ -560,6 +588,7 @@ Block map legend (bulletin format):
 - `[ ]` = Unused (never used or zeroed out)
 
 **Block breakdown** (bulletin format):
+
 - Active header blocks: Directory entries that start messages
 - Active chain blocks: Continuation blocks for active messages
 - Deleted header blocks: Message starts not in directory
@@ -573,12 +602,14 @@ python3 gbbsmsgtool.py extract <filename> <type> [options]
 ```
 
 **Required - specify extraction type:**
+
 - `--active` - Extract active messages
 - `--deleted` - Extract deleted messages
 - `--orphaned` - Extract orphaned blocks
 - `--all` - Extract all three types
 
 **Optional flags:**
+
 - `--output-dir <path>` - Write to directory instead of stdout
 - `--users <users_file>` - Path to USERS file (for email recipient names)
 - `--force` - Overwrite existing files (default: abort if files exist)
@@ -609,11 +640,13 @@ python3 gbbsmsgtool.py extract B5 --active --output-dir B5_messages --force
 Optional USERS file can be provided to display recipient names for email messages.
 
 **USERS File Format** (standard GBBS Pro, may vary if modified by sysops):
+
 - Random-access file with 128-byte records
 - Record N corresponds to User ID N
 - Record 0 is typically unused (no user ID 0)
 
 Record structure:
+
 - First_name,Last_Name\r (uppercase)
 - Full_name\r (proper case, preferred for display)
 - City,State\r
@@ -650,6 +683,7 @@ Message body...
 **Stdout mode**: Messages are written to stdout with separators between types when using `--all`.
 
 **Directory mode**: Messages are written as individual files:
+
 - Active: `Msg-0001.txt`, `Msg-0002.txt`, etc. (numbered by directory entry order for bulletins, by date for email)
 - Deleted: `Deleted-0001.txt`, `Deleted-0002.txt`, etc. (numbered by timestamp order, bulletin format only)
 - Orphaned: `Orphan-0033.txt`, `Orphan-0034.txt`, etc. (numbered by starting block number, bulletin format only)
@@ -659,12 +693,14 @@ File timestamps are set to the 'Date:' timestamp from the message header when av
 #### Message Type Categories
 
 **Active Messages**: 
+
 - **Bulletin format**: Messages currently referenced in the directory. Extracted by following directory entries and their block chains.
 - **Email format**: All messages in user chains. Directory entry N = User ID N. Messages within each user's chain are separated by EOT (0x04).
 
 **Deleted Messages**: (Bulletin format only) Messages that have been removed from the directory but still have their header block (containing message start pattern) intact. These are complete messages that can be fully reconstructed by following their block chains through unused space.
 
 **Orphaned Blocks**: (Bulletin format only) Data blocks that contain readable content but lack a message header. These are fragments from:
+
 - Partially overwritten messages where the header was reused
 - Messages where only continuation blocks remain
 - Incomplete deletions or corruption
@@ -676,6 +712,7 @@ Orphaned blocks are extracted by following their chain pointers as far as possib
 #### Extraction Algorithm
 
 **Bulletin Format - Active Messages**:
+
 1. Read directory entries
 2. For each valid entry, follow block chain pointers (bytes 126-127)
 3. Decode 7-bit compressed data from each block
@@ -683,12 +720,14 @@ Orphaned blocks are extracted by following their chain pointers as far as possib
 5. Number by directory entry (preserves chronological order)
 
 **Bulletin Format - Deleted Messages**:
+
 1. Scan unused blocks for message start pattern (subject/to/from/date)
 2. Follow block chains through unused space only
 3. Stop when chain enters allocated space or hits null terminator
 4. Sort by timestamp and number sequentially
 
 **Bulletin Format - Orphaned Blocks**:
+
 1. Find unused blocks with data but no message start pattern
 2. Skip blocks already included in deleted message chains
 3. Follow block chains through unused space
@@ -696,6 +735,7 @@ Orphaned blocks are extracted by following their chain pointers as far as possib
 5. Stop when chain enters allocated space or hits null terminator
 
 **Email Format - Active Messages**:
+
 1. Read directory entries (entry N = User ID N)
 2. For each non-zero entry, follow block chain pointers
 3. Decode 7-bit compressed data from complete chain
