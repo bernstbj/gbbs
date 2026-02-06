@@ -47,6 +47,14 @@ I'm not going to go into detail on how to use the various tools that exist, but 
 
 In general, messages typically were stored as bulletin files named `B1`, `B2`, and so forth to correspond with what board number it related to.
 
+
+## How to download the tool
+
+This is a Python 3 script that doesn't require any special libraries to be installed. As such, as long as you have `python3` on your machine, this script should run without any special virtual environments or trickery like that.
+
+You can download the script from github [HERE](https://github.com/bernstbj/gbbs/gbbsmsgtool.py).
+
+
 ## How to use the tool
 
 Running the tool from the command-line without arguments will produce a help screen:
