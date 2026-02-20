@@ -34,7 +34,7 @@ In GBBS Pro, the message database files were used for two purposes: bulletins (a
 
 
 ## Some notes about message database files
-If you want to go into the technical weeds, read my document on the file format. It will tell you probably everything you want to know, and perhaps good to read before the next paragraph if it doesn't make sense.
+If you want to go into the technical weeds, [read my document on the file format](msgdb-technical.md). It will tell you probably everything you want to know, and perhaps good to read before the next paragraph if it doesn't make sense.
 
 On a less-technical front, I will point out that there are size limitations for the databases. Specifically, when the sysop creates a new message board for their BBS, they specify a key thing: what is the maximum number of messages that a message board can hold.
 
@@ -43,9 +43,28 @@ As a way to prevent the disks on a BBS from filling up, GBBS Pro supported the f
 This auto-purge mechanism was super convenient, but if you're looking to find every message that ever existed on an old BBS, note that many sysops had this feature enabled to save disk space. As well, this is why you'll find deleted messages and orphaned fragments; probably because that (say) 10 message limit was hit multiple times and rotated the database.
 
 ## Getting your message files from your Apple II
-I'm not going to go into detail on how to use the various tools that exist, but I suggest looking into [CiderPress II](https://ciderpress2.com/), and [AppleCommander](https://applecommander.github.io/).
+There are two disk extraction tools which I can recommend: [CiderPress II](https://ciderpress2.com/), and [AppleCommander](https://applecommander.github.io/). While there are others that you can use, the key thing is that you need to extract the files in their original, non-translated forms for this `gbbsmsgtool.py` to work.
 
-In general, messages typically were stored as bulletin files named `B1`, `B2`, and so forth to correspond with what board number it related to.
+The files you're interested in are typically on your "system" and/or "bulletins" disks:
+
+- Any file named `B1`, `B2`, or 'B' with a number after it. This is the default naming convention for the message database files used to hold the bulletin / board / base files.
+- The email database file which is typically named `MAIL`.
+- The user database file named `USERS`, if you have it (probably on the "system" disk).
+- The BBS configuration file that holds information on the bulletin files, named `DATA2`. There is also a `DATA` and `DATA1` file, but those are different and don't contain information useful to the message extraction task.
+
+Note that the `USERS` and `DATA2` files are not required to extract messages, but they add extra fields to the output that is desirable.
+
+### Example using CiderPress II:
+```
+bash> cp2 extract gbbs_bulletins.dsk B1
+```
+...the `extract` command directs CiderPress to not convert the file, just extract a file called `B1` from the `.dsk` image. Note there is also the `catalog` command which you can use to see what files are on the disk image.
+
+### Example using AppleCommander:
+```
+bash> ac.sh -g gbbs_bulletins.dsk B1 B1
+```
+...the `-g` argument directs AppleCommander to not convert the file, just extract a file called `B1` (the first argument) from the `.dsk` image, and save it in the current directory as `B1` (the second argument). Note there is also the `-ll` argument which you can use to see what files are on the disk image.
 
 
 ## How to download the tool
@@ -64,7 +83,7 @@ GBBS Pro Message Database Tool v1.0.1
 
 Usage:
   gbbsmsgtool.py analyze <msgdb_file>
-  gbbsmsgtool.py extract <msgdb_file> [--active] [--deleted] [--orphaned] [--all] [--output-dir <path>] [--users <users_file>] [--force]
+  gbbsmsgtool.py extract <msgdb_file> [--active] [--deleted] [--orphaned] [--all] [--output-dir <path>] [--users <users_file>] [--data2 <data2_file>] [--pretty] [--force]
 
 Commands:
   analyze    Show database statistics and block map
@@ -77,6 +96,8 @@ Extract options:
   --all          Extract all types
   --output-dir   Write to directory instead of stdout
   --users        Path to USERS file (for email recipient names)
+  --data2        Path to DATA2 file (for board names)
+  --pretty       Format messages with readable headers (default: raw)
   --force        Overwrite existing files (default: abort if files exist)
 ```
 
@@ -160,7 +181,48 @@ You need to specify at least one extraction mode option: active, deleted, orphan
 
 Output of extracted files will be to `STDOUT` unless you specify `--output-dir`.
 
-If you have the GBBS Pro user database file (typically named `USERS`), you can specify this to assist the tool in extracting email files. Has no effect with bulletin files since user names are part of the message data. For email, however, you will only be able to identify the intended recipient of a message by including this file.
+#### Optional Files
+
+**USERS file:** If you have the GBBS Pro user database file (typically named `USERS`), you can specify this with `--users` to:
+- Display recipient names for email messages (instead of just "User ID N")
+- Detect when bulletin board users posted with an alias (shows both the alias and real name)
+
+**DATA2 file:** If you have the GBBS Pro configuration file (typically named `DATA2`), you can specify this with `--data2` to:
+- Display board names in message output (e.g., "System News" instead of just "B1")
+- Only applies to bulletin board files, not email
+
+#### Message Formatting
+
+By default, messages are extracted in "raw" format, preserving the original GBBS Pro message structure. Use `--pretty` to format messages with more readable headers:
+
+**Raw format** (default):
+```
+ARRRGGHHH!!
+0,All
+1,Drone (#1)
+Date : 01/08/88  05:23:05 PM
+
+[message body]
+```
+
+**Pretty format** (with `--pretty`):
+```
+Board: System News (B1)
+Subject: ARRRGGHHH!!
+To: All
+From: Drone (#1)
+Date : 01/08/88  05:23:05 PM
+
+[message body]
+```
+
+When a user posts with an alias (detected via USERS file), the pretty format shows:
+```
+From: DRONE: THE OWNER AND SYSOP (#2-Shortround)
+```
+This indicates user #2 (Shortround) posted using the alias "DRONE: THE OWNER AND SYSOP".
+
+**Note:** The pretty format parser is based on standard GBBS Pro message headers. If your BBS uses customized headers, you may need to modify the `prettify_message()` function in the tool (see comments in the code for customization points).
 
 Example usage:
 ```

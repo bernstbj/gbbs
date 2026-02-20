@@ -15,6 +15,70 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+def read_data2_file(filename):
+    """
+    Read GBBS Pro DATA2 file and return a dictionary mapping board filenames to board names.
+    
+    DATA2 file format:
+    - 128-byte fixed-length records
+    - Records 0-8: Access level descriptions
+    - Records 9+: Message base definitions
+    
+    Message base record structure (128 bytes):
+    - Board name (null-terminated, ends with \\r)
+    - Filename in format F:B#\\r (e.g., F:B1, F:B2)
+    - Additional fields (access levels, limits, etc.)
+    
+    Returns dict mapping filename to board name, e.g.:
+    {'B1': 'System News', 'B2': 'Public Base', ...}
+    """
+    try:
+        with open(filename, 'rb') as f:
+            data = f.read()
+    except:
+        return {}
+    
+    boards = {}
+    record_size = 128
+    num_records = len(data) // record_size
+    
+    # Start at record 9 (offset 1152) where message bases begin
+    for rec_num in range(9, num_records):
+        offset = rec_num * record_size
+        record = data[offset:offset+record_size]
+        
+        # Look for pattern: name\rF:filename\r
+        if b'\rF:' not in record:
+            continue
+        
+        # Extract board name (up to first \r)
+        name_end = record.find(0x0d)
+        if name_end <= 0:
+            continue
+        
+        board_name = record[:name_end].decode('ascii', errors='replace').strip()
+        
+        # Extract filename (F:B#)
+        file_start = record.find(b'\rF:')
+        if file_start < 0:
+            continue
+        
+        file_end = record.find(0x0d, file_start + 1)
+        if file_end <= 0:
+            continue
+        
+        filename = record[file_start+2:file_end].decode('ascii', errors='replace').strip()
+        
+        # Only process message base files (B#)
+        if filename.startswith(':B') or filename.startswith('B'):
+            # Normalize to just B# format
+            if filename.startswith(':'):
+                filename = filename[1:]
+            
+            boards[filename] = board_name
+    
+    return boards
+
 def read_users_file(filename):
     """
     Read GBBS Pro USERS file and return a dictionary mapping user_id to user info.
@@ -579,7 +643,164 @@ def cmd_analyze(filename, users_file=None):
         print(f"Email format: Directory entries map to user IDs")
         print(f"Messages are EOT-separated (0x04) within user chains")
 
-def cmd_extract(filename, active=False, deleted=False, orphaned=False, output_dir=None, users_file=None, force=False):
+def prettify_message(message_text, fmt, board_name=None, board_file=None, user_info=None, users=None):
+    """
+    Convert raw GBBS message format to pretty format.
+    
+    CUSTOMIZATION NOTE: The header patterns below are based on standard GBBS Pro.
+    If your BBS uses different header formats, modify the patterns in this function.
+    """
+    lines = message_text.split('\n')
+    if len(lines) < 4:
+        return message_text
+    
+    if fmt == 'bulletin':
+        # Bulletin format:
+        # Line 0: Subject
+        # Line 1: To (format: "user_id,username" or "0,All")
+        # Line 2: From (format: "user_id,username (#user_id)")
+        # Line 3: Date line
+        
+        subject = lines[0]
+        
+        # Parse To line (CUSTOMIZATION: modify pattern if your BBS uses different format)
+        to_match = re.match(r'^(\d+),(.+)$', lines[1])
+        if to_match:
+            to_id, to_name = to_match.groups()
+            to_line = f"To: {to_name.strip()}"
+        else:
+            to_line = lines[1]
+        
+        # Parse From line (CUSTOMIZATION: modify pattern if your BBS uses different format)
+        # Try format with (#id): "user_id,username (#user_id)"
+        from_match = re.match(r'^(\d+),(.+?)\s*\(#(\d+)\)$', lines[2])
+        if from_match:
+            from_id, from_name, from_id2 = from_match.groups()
+            from_name = from_name.strip()
+            from_id_int = int(from_id)
+            
+            # Check if user posted with different name (requires USERS file)
+            if users and from_id_int in users:
+                actual_name = users[from_id_int].get('full_name', '')
+                if actual_name and actual_name != from_name:
+                    # User posted with alias
+                    from_line = f"From: {from_name} (#{from_id}-{actual_name})"
+                else:
+                    from_line = f"From: {from_name} (#{from_id})"
+            else:
+                from_line = f"From: {from_name} (#{from_id})"
+        else:
+            # Try format without (#id): "user_id,username"
+            from_match2 = re.match(r'^(\d+),(.+)$', lines[2])
+            if from_match2:
+                from_id, from_name = from_match2.groups()
+                from_name = from_name.strip()
+                from_id_int = int(from_id)
+                
+                # Check if user posted with different name (requires USERS file)
+                if users and from_id_int in users:
+                    actual_name = users[from_id_int].get('full_name', '')
+                    if actual_name and actual_name != from_name:
+                        # User posted with alias
+                        from_line = f"From: {from_name} (#{from_id}-{actual_name})"
+                    else:
+                        from_line = f"From: {from_name} (#{from_id})"
+                else:
+                    from_line = f"From: {from_name} (#{from_id})"
+            else:
+                from_line = lines[2]
+        
+        # Date line (keep as-is, just ensure consistent format)
+        date_line = lines[3]
+        
+        # Build pretty header
+        pretty_lines = []
+        if board_name and board_file:
+            pretty_lines.append(f"Board: {board_name} ({board_file})")
+        pretty_lines.append(f"Subject: {subject}")
+        pretty_lines.append(to_line)
+        pretty_lines.append(from_line)
+        pretty_lines.append(date_line)
+        pretty_lines.append('')
+        
+        # Add message body (everything after line 4)
+        if len(lines) > 4:
+            pretty_lines.extend(lines[4:])
+        
+        return '\n'.join(pretty_lines)
+    
+    elif fmt == 'email':
+        # Email format (with To: line already prepended):
+        # Line 0: To: username (#id)  [added by tool]
+        # Line 1: (blank line)
+        # Line 2: sender_user_id
+        # Line 3: Subj : subject
+        # Line 4: From : username (#user_id)
+        # Line 5: Date : timestamp
+        
+        # CUSTOMIZATION: Modify these patterns if your BBS uses different email headers
+        to_line = lines[0] if lines[0].startswith('To:') else None
+        
+        # Find the header lines (skip blank lines and To: line)
+        start_idx = 0
+        if to_line:
+            start_idx = 2  # Skip "To:" and blank line
+        
+        # Look for sender ID, Subj, From, Date
+        sender_id = None
+        subject = None
+        from_line = None
+        date_line = None
+        body_start = start_idx
+        
+        for i in range(start_idx, min(start_idx + 10, len(lines))):
+            line = lines[i].strip()
+            
+            # Sender ID (just a number)
+            if sender_id is None and line.isdigit():
+                sender_id = line
+                body_start = i + 1
+                continue
+            
+            # Subject line (CUSTOMIZATION: modify pattern for your BBS)
+            if subject is None and line.startswith('Subj '):
+                subject = line.replace('Subj :', 'Subject:', 1).replace('Subj->', 'Subject:', 1)
+                body_start = i + 1
+                continue
+            
+            # From line (CUSTOMIZATION: modify pattern for your BBS)
+            if from_line is None and line.startswith('From '):
+                from_line = line.replace('From :', 'From:', 1).replace('From->', 'From:', 1)
+                body_start = i + 1
+                continue
+            
+            # Date line (CUSTOMIZATION: modify pattern for your BBS)
+            if date_line is None and 'Date' in line:
+                date_line = line.replace('Date :', 'Date:', 1).replace('Date->', 'Date:', 1)
+                body_start = i + 1
+                break
+        
+        # Build pretty header
+        pretty_lines = []
+        if to_line:
+            pretty_lines.append(to_line)
+        if from_line:
+            pretty_lines.append(from_line)
+        if subject:
+            pretty_lines.append(subject)
+        if date_line:
+            pretty_lines.append(date_line)
+        pretty_lines.append('')
+        
+        # Add message body
+        if body_start < len(lines):
+            pretty_lines.extend(lines[body_start:])
+        
+        return '\n'.join(pretty_lines)
+    
+    return message_text
+
+def cmd_extract(filename, active=False, deleted=False, orphaned=False, output_dir=None, users_file=None, data2_file=None, force=False, pretty=False):
     """Extract messages from database."""
     try:
         with open(filename, 'rb') as f:
@@ -596,6 +817,12 @@ def cmd_extract(filename, active=False, deleted=False, orphaned=False, output_di
         users = read_users_file(users_file)
         if not users:
             print(f"Warning: Could not read USERS file '{users_file}' or file is empty")
+    
+    boards = None
+    if data2_file:
+        boards = read_data2_file(data2_file)
+        if not boards:
+            print(f"Warning: Could not read DATA2 file '{data2_file}' or file is empty")
     
     result = scan_database(data, users)
     fmt = result['format']
@@ -650,20 +877,33 @@ def cmd_extract(filename, active=False, deleted=False, orphaned=False, output_di
     if output_dir:
         Path(output_dir).mkdir(parents=True, exist_ok=True)
     
+    # Get board name if available
+    board_name = None
+    board_file = None
+    if boards and fmt == 'bulletin':
+        board_file = Path(filename).name
+        board_name = boards.get(board_file)
+    
     # Extract active messages
     if active:
         if not output_dir:
             print("=" * 60)
             print("ACTIVE MESSAGES")
+            if board_name:
+                print(f"Board: {board_name}")
             print("=" * 60)
         
         for i, msg in enumerate(result['active_messages'], 1):
             # Prepend "To: " line for email format
             message_text = msg['message']
             if fmt == 'email' and msg.get('user_info'):
-                message_text = f"To: {msg['user_info']['full_name']} (#{msg['user_id']})\n{message_text}"
+                message_text = f"To: {msg['user_info']['full_name']} (#{msg['user_id']})\n\n{message_text}"
             elif fmt == 'email':
-                message_text = f"To: User ID {msg['user_id']} (#{msg['user_id']})\n{message_text}"
+                message_text = f"To: User ID {msg['user_id']} (#{msg['user_id']})\n\n{message_text}"
+            
+            # Apply pretty formatting if requested
+            if pretty:
+                message_text = prettify_message(message_text, fmt, board_name, board_file, msg.get('user_info'), users)
             
             if output_dir:
                 filename_out = Path(output_dir) / f"Msg-{i:04d}.txt"
@@ -675,7 +915,10 @@ def cmd_extract(filename, active=False, deleted=False, orphaned=False, output_di
             else:
                 print(f"\n{'='*60}")
                 if fmt == 'bulletin':
-                    print(f"Message {i} (Entry {msg['entry']}, Block {msg['block']})")
+                    header = f"Message {i} (Entry {msg['entry']}, Block {msg['block']})"
+                    if board_name:
+                        header += f" - {board_name}"
+                    print(header)
                 else:
                     # Email format - show user info if available
                     user_info = msg.get('user_info')
@@ -691,27 +934,40 @@ def cmd_extract(filename, active=False, deleted=False, orphaned=False, output_di
         if not output_dir:
             print("\n" + "=" * 60)
             print("DELETED MESSAGES")
+            if board_name:
+                print(f"Board: {board_name}")
             print("=" * 60)
         
         for i, msg in enumerate(result['deleted_messages'], 1):
+            message_text = msg['message']
+            
+            # Apply pretty formatting if requested
+            if pretty:
+                message_text = prettify_message(message_text, fmt, board_name, board_file, None, users)
+            
             if output_dir:
                 filename_out = Path(output_dir) / f"Deleted-{i:04d}.txt"
                 with open(filename_out, 'w') as f:
-                    f.write(msg['message'])
+                    f.write(message_text)
                 if msg.get('date'):
                     timestamp = msg['date'].timestamp()
                     os.utime(filename_out, (timestamp, timestamp))
             else:
                 print(f"\n{'='*60}")
-                print(f"Deleted Message {i} (Block {msg['block']})")
+                header = f"Deleted Message {i} (Block {msg['block']})"
+                if board_name:
+                    header += f" - {board_name}"
+                print(header)
                 print('='*60)
-                print(msg['message'])
+                print(message_text)
     
     # Extract orphaned blocks
     if orphaned:
         if not output_dir:
             print("\n" + "=" * 60)
             print("ORPHANED BLOCKS")
+            if board_name:
+                print(f"Board: {board_name}")
             print("=" * 60)
         
         for msg in result['orphaned_messages']:
@@ -721,17 +977,20 @@ def cmd_extract(filename, active=False, deleted=False, orphaned=False, output_di
                     f.write(msg['message'])
             else:
                 print(f"\n{'='*60}")
-                print(f"Orphaned Block {msg['block']}")
+                header = f"Orphaned Block {msg['block']}"
+                if board_name:
+                    header += f" - {board_name}"
+                print(header)
                 print('='*60)
                 print(msg['message'])
 
 def main():
-    if len(sys.argv) < 2:
-        print("GBBS Pro Message Database Tool v1.0.1")
+    if len(sys.argv) < 2 or '--help' in sys.argv:
+        print("GBBS Pro Message Database Tool v1.1.0")
         print("2026-02-05, Brian J. Bernstein  (brian@dronefone.com)")
         print("\nUsage:")
         print("  gbbsmsgtool.py analyze <msgdb_file>")
-        print("  gbbsmsgtool.py extract <msgdb_file> [--active] [--deleted] [--orphaned] [--all] [--output-dir <path>] [--users <users_file>] [--force]")
+        print("  gbbsmsgtool.py extract <msgdb_file> [--active] [--deleted] [--orphaned] [--all] [--output-dir <path>] [--users <users_file>] [--data2 <data2_file>] [--pretty] [--force]")
         print("\nCommands:")
         print("  analyze    Show database statistics and block map")
         print("  extract    Extract messages from database")
@@ -742,6 +1001,8 @@ def main():
         print("  --all          Extract all types")
         print("  --output-dir   Write to directory instead of stdout")
         print("  --users        Path to USERS file (for email recipient names)")
+        print("  --data2        Path to DATA2 file (for board names)")
+        print("  --pretty       Format messages with readable headers (default: raw)")
         print("  --force        Overwrite existing files (default: abort if files exist)")
         sys.exit(1)
     
@@ -753,6 +1014,13 @@ def main():
         idx = sys.argv.index('--users')
         if idx + 1 < len(sys.argv):
             users_file = sys.argv[idx + 1]
+    
+    # Parse --data2 option
+    data2_file = None
+    if '--data2' in sys.argv:
+        idx = sys.argv.index('--data2')
+        if idx + 1 < len(sys.argv):
+            data2_file = sys.argv[idx + 1]
     
     if command == "analyze":
         if len(sys.argv) < 3:
@@ -771,6 +1039,7 @@ def main():
         orphaned = '--orphaned' in sys.argv
         all_types = '--all' in sys.argv
         force = '--force' in sys.argv
+        pretty = '--pretty' in sys.argv
         
         # Check if user specified what to extract
         if not (active or deleted or orphaned or all_types):
@@ -787,7 +1056,7 @@ def main():
             if idx + 1 < len(sys.argv):
                 output_dir = sys.argv[idx + 1]
         
-        cmd_extract(filename, active, deleted, orphaned, output_dir, users_file, force)
+        cmd_extract(filename, active, deleted, orphaned, output_dir, users_file, data2_file, force, pretty)
     
     else:
         print(f"Error: Unknown command '{command}'")

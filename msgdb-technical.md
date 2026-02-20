@@ -227,7 +227,7 @@ Block number translation:
 - Checks bytes 126-127 for next block pointer
 - If pointer is 0x0000, end of message
 - If non-zero, reads that block and continues
-- **NO loop detection** - self-referencing pointers cause infinite loop/hang
+- **NO loop detection** - self-referencing pointers cause infinite loop/hang (a bug I found during extraction of some sample msgdb files)
 
 **Self-Referencing Chain Pointers** (block N -> block N):
 
@@ -302,6 +302,8 @@ Char | ASCII | Encoded | Binary      | Bit 7
 High bits collected in order: `1000100` = 0x44 = 'D'
 
 Result: 7 bytes encode "PRESUMED" (8 characters)
+
+(yes, this example was copied from the GBBS newsletter - see references at bottom of this document)
 
 ### Encoding Process
 1. Take 8 characters to encode
@@ -611,7 +613,9 @@ python3 gbbsmsgtool.py extract <filename> <type> [options]
 **Optional flags:**
 
 - `--output-dir <path>` - Write to directory instead of stdout
-- `--users <users_file>` - Path to USERS file (for email recipient names)
+- `--users <users_file>` - Path to USERS file (for email recipient names and alias detection)
+- `--data2 <data2_file>` - Path to DATA2 file (for board names)
+- `--pretty` - Format messages with readable headers (default: raw)
 - `--force` - Overwrite existing files (default: abort if files exist)
 
 **File Protection:**
@@ -631,13 +635,33 @@ python3 gbbsmsgtool.py extract B5 --deleted --output-dir B5_deleted
 # Extract email with user names
 python3 gbbsmsgtool.py extract MAIL --active --users USERS --output-dir MAIL_messages
 
+# Extract with board names and pretty formatting
+python3 gbbsmsgtool.py extract B1 --all --data2 DATA2 --users USERS --pretty --output-dir B1_messages
+
 # Force overwrite existing files
 python3 gbbsmsgtool.py extract B5 --active --output-dir B5_messages --force
 ```
 
+#### DATA2 File Support
+
+Optional DATA2 file can be provided to display board names for bulletin board files.
+
+**DATA2 File Format** (standard GBBS Pro):
+
+- 128-byte fixed-length records
+- Records 0-8: Access level descriptions
+- Records 9+: Message base definitions
+
+Message base record structure:
+- Board name (null-terminated, ends with \r)
+- Filename in format F:B#\r (e.g., F:B1, F:B2)
+- Additional fields (access levels, limits, etc.)
+
+The tool extracts the mapping of filenames (B1, B2, etc.) to board names (System News, Public Base, etc.) and displays them in message output when using `--pretty` format.
+
 #### USERS File Support
 
-Optional USERS file can be provided to display recipient names for email messages.
+Optional USERS file can be provided to display recipient names for email messages and detect alias usage in bulletin messages.
 
 **USERS File Format** (standard GBBS Pro, may vary if modified by sysops):
 
@@ -654,7 +678,9 @@ Record structure:
 - Offset 70: password (8 bytes)
 - Offset 78: phone_number (12 bytes)
 
-The tool only reads the Full_name field for display purposes.
+The tool reads the Full_name field for:
+- Email recipient identification
+- Bulletin message alias detection (when poster name doesn't match USERS file)
 
 **Email Message Output with USERS file:**
 ```
@@ -680,6 +706,13 @@ Message body...
 
 #### Output Format
 
+**Raw format** (default): Preserves original GBBS Pro message structure as stored in the database.
+
+**Pretty format** (with `--pretty` flag): Reformats message headers for readability:
+- Adds board name header (when DATA2 file provided)
+- Converts comma-separated headers to labeled format
+- Detects and displays alias usage (when USERS file provided)
+
 **Stdout mode**: Messages are written to stdout with separators between types when using `--all`.
 
 **Directory mode**: Messages are written as individual files:
@@ -689,6 +722,34 @@ Message body...
 - Orphaned: `Orphan-0033.txt`, `Orphan-0034.txt`, etc. (numbered by starting block number, bulletin format only)
 
 File timestamps are set to the 'Date:' timestamp from the message header when available.
+
+**Pretty format examples:**
+
+Bulletin message with board name:
+```
+Board: System News (B1)
+Subject: ARRRGGHHH!!
+To: All
+From: Drone (#1)
+Date : 01/08/88  05:23:05 PM
+
+[message body]
+```
+
+Bulletin message with alias detection:
+```
+Board: System News (B1)
+Subject: Thats it. I'm pissed
+To: All
+From: DRONE: THE OWNER AND SYSOP (#2-Shortround)
+Date : 01/13/88  08:34:03 AM
+
+[message body]
+```
+
+The format `(#2-Shortround)` indicates user #2 (Shortround) posted using the alias "DRONE: THE OWNER AND SYSOP".
+
+**Customization Note:** The pretty format parser is based on standard GBBS Pro message headers. If your BBS uses customized headers, modify the `prettify_message()` function in the tool (see code comments for customization points).
 
 #### Message Type Categories
 
