@@ -1,3 +1,8 @@
+v1.2.0
+- Added --json flag for JSON output (analyze and extract).
+- JSON extract includes analysis stats plus structured message fields.
+- With --output-dir, JSON writes a single <filename>.json file.
+
 v1.1.0
 - Added support for DATA2 file.
 - Added 'raw' and 'pretty' output options.

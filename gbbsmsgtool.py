@@ -12,6 +12,7 @@ import struct
 import sys
 import os
 import re
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -532,7 +533,7 @@ def follow_chain_with_tracking(data, start_block, total_blocks, stop_blocks, dat
     
     return full_message, blocks_used
 
-def cmd_analyze(filename, users_file=None):
+def cmd_analyze(filename, users_file=None, use_json=False):
     """Display database statistics and block map."""
     try:
         with open(filename, 'rb') as f:
@@ -553,6 +554,13 @@ def cmd_analyze(filename, users_file=None):
     fmt = detect_format(data)
     result = scan_database(data, users)
     
+    # --- JSON output path ---
+    if use_json:
+        json_out = build_analysis_json(result, filename, len(data))
+        print(json.dumps(json_out, indent=2, ensure_ascii=False))
+        return
+    
+    # --- Text output path ---
     print(f"=== Database Analysis: {filename} ===\n")
     print(f"Format: {fmt.upper()}")
     print(f"File size: {len(data)} bytes")
@@ -800,7 +808,156 @@ def prettify_message(message_text, fmt, board_name=None, board_file=None, user_i
     
     return message_text
 
-def cmd_extract(filename, active=False, deleted=False, orphaned=False, output_dir=None, users_file=None, data2_file=None, force=False, pretty=False):
+def parse_message_fields(message_text, fmt, board_name=None, board_file=None, user_info=None, users=None):
+    """
+    Parse raw GBBS message text into structured fields for JSON output.
+    
+    Returns a dict with: subject, to, to_id, from, from_id, from_alias, date, board, body
+    
+    CUSTOMIZATION NOTE: The header patterns below are based on standard GBBS Pro.
+    If your BBS uses different header formats, modify the regex patterns in this function.
+    The key patterns to look for are:
+      - Bulletin "To" line:   "user_id,username" (e.g. "0,All")
+      - Bulletin "From" line: "user_id,username (#user_id)" (e.g. "1,Drone (#1)")
+      - Email "Subj" line:   "Subj : subject" or "Subj->subject"
+      - Email "From" line:   "From : username (#user_id)" or "From->username (#user_id)"
+      - Date line:           "Date : MM/DD/YY HH:MM:SS AM/PM" or "Date->..."
+    """
+    fields = {
+        'subject': None, 'to': None, 'to_id': None,
+        'from': None, 'from_id': None, 'from_alias': None,
+        'date': None, 'board': None, 'body': '', 'raw': message_text
+    }
+    
+    if board_name:
+        fields['board'] = board_name
+    
+    lines = message_text.split('\n')
+    
+    if fmt == 'bulletin':
+        if len(lines) < 4:
+            fields['body'] = message_text
+            return fields
+        
+        fields['subject'] = lines[0]
+        
+        # CUSTOMIZATION: Bulletin "To" line pattern — "user_id,username"
+        to_match = re.match(r'^(\d+),(.+)$', lines[1])
+        if to_match:
+            fields['to_id'] = int(to_match.group(1))
+            fields['to'] = to_match.group(2).strip()
+        
+        # CUSTOMIZATION: Bulletin "From" line pattern — "user_id,username (#user_id)"
+        from_match = re.match(r'^(\d+),(.+?)\s*(?:\(#(\d+)\))?$', lines[2])
+        if from_match:
+            fields['from_id'] = int(from_match.group(1))
+            fields['from'] = from_match.group(2).strip()
+            
+            # Alias detection (requires USERS file)
+            if users and fields['from_id'] in users:
+                actual_name = users[fields['from_id']].get('full_name', '')
+                if actual_name and actual_name != fields['from']:
+                    fields['from_alias'] = actual_name
+        
+        # CUSTOMIZATION: Date line — "Date : ..." or "Date->..."
+        date = parse_date(lines[3])
+        if date:
+            fields['date'] = date.strftime("%m/%d/%y %I:%M:%S %p")
+        
+        # Body is everything after the date line (line 3) + blank line
+        body_start = 4
+        if body_start < len(lines) and lines[body_start] == '':
+            body_start += 1
+        fields['body'] = '\n'.join(lines[body_start:])
+    
+    elif fmt == 'email':
+        # Email may have "To: ..." prepended by the tool
+        start_idx = 0
+        if lines[0].startswith('To:'):
+            # Parse the To line added by the tool
+            to_match = re.match(r'^To:\s*(.+?)\s*\(#(\d+)\)', lines[0])
+            if to_match:
+                fields['to'] = to_match.group(1).strip()
+                fields['to_id'] = int(to_match.group(2))
+            start_idx = 2  # skip To line and blank line
+        
+        for i in range(start_idx, min(start_idx + 10, len(lines))):
+            line = lines[i].strip()
+            
+            if line.isdigit() and fields['from_id'] is None:
+                fields['from_id'] = int(line)
+                continue
+            
+            # CUSTOMIZATION: Email subject — "Subj : subject" or "Subj->subject"
+            if fields['subject'] is None and line.startswith('Subj'):
+                subj_match = re.match(r'^Subj\s*[:\->]+\s*(.+)$', line)
+                if subj_match:
+                    fields['subject'] = subj_match.group(1).strip()
+                continue
+            
+            # CUSTOMIZATION: Email from — "From : username (#id)" or "From->username (#id)"
+            if fields['from'] is None and line.startswith('From'):
+                from_match = re.match(r'^From\s*[:\->]+\s*(.+?)\s*\(#(\d+)\)', line)
+                if from_match:
+                    fields['from'] = from_match.group(1).strip()
+                    if fields['from_id'] is None:
+                        fields['from_id'] = int(from_match.group(2))
+                continue
+            
+            # CUSTOMIZATION: Date line — "Date : ..." or "Date->..."
+            if fields['date'] is None and 'Date' in line:
+                date = parse_date(line)
+                if date:
+                    fields['date'] = date.strftime("%m/%d/%y %I:%M:%S %p")
+                body_start = i + 1
+                if body_start < len(lines) and lines[body_start].strip() == '':
+                    body_start += 1
+                fields['body'] = '\n'.join(lines[body_start:])
+                break
+    
+    return fields
+
+
+def build_analysis_json(result, filename, data_len):
+    """Build analysis dict for JSON output."""
+    msginfo = result['msginfo']
+    info = {
+        'source_file': Path(filename).name,
+        'format': result['format'],
+        'file_size': data_len,
+        'bitmap_blocks': msginfo['bitmap_blocks'],
+        'directory_blocks': msginfo['dir_blocks'],
+        'used_data_blocks': msginfo['used_blocks'],
+        'message_count': msginfo['msg_count'],
+        'new_message_number': msginfo['new_msg_num'],
+        'total_blocks': result['total_blocks'],
+        'active_count': len(result['active_messages']),
+        'deleted_count': len(result['deleted_messages']),
+        'orphaned_count': len(result['orphaned_messages']),
+    }
+    if result['format'] == 'bulletin':
+        active_header = set(m['block'] for m in result['active_messages'])
+        active_chain = result.get('active_all_blocks', set()) - active_header
+        deleted_header = set(m['block'] for m in result['deleted_messages'])
+        deleted_chain = result.get('deleted_all_blocks', set()) - deleted_header
+        orphaned = result.get('orphaned_blocks', set())
+        all_used = result.get('active_all_blocks', set()) | result.get('deleted_all_blocks', set()) | orphaned
+        info['block_breakdown'] = {
+            'active_header': len(active_header),
+            'active_chain': len(active_chain),
+            'deleted_header': len(deleted_header),
+            'deleted_chain': len(deleted_chain),
+            'orphaned': len(orphaned),
+            'unused': result['total_blocks'] - len(all_used),
+        }
+        info['usage_percent'] = round(len(result.get('active_all_blocks', set())) / result['total_blocks'] * 100, 1) if result['total_blocks'] > 0 else 0
+    else:
+        info['allocated_blocks'] = len(result.get('allocated_blocks', set()))
+        info['usage_percent'] = round(len(result.get('allocated_blocks', set())) / result['total_blocks'] * 100, 1) if result['total_blocks'] > 0 else 0
+    return info
+
+
+def cmd_extract(filename, active=False, deleted=False, orphaned=False, output_dir=None, users_file=None, data2_file=None, force=False, pretty=False, use_json=False):
     """Extract messages from database."""
     try:
         with open(filename, 'rb') as f:
@@ -845,23 +1002,29 @@ def cmd_extract(filename, active=False, deleted=False, orphaned=False, output_di
         if not force:
             existing_files = []
             
-            if active:
-                for i in range(1, len(result['active_messages']) + 1):
-                    filename_out = Path(output_dir) / f"Msg-{i:04d}.txt"
-                    if filename_out.exists():
-                        existing_files.append(str(filename_out))
-            
-            if deleted:
-                for i in range(1, len(result['deleted_messages']) + 1):
-                    filename_out = Path(output_dir) / f"Deleted-{i:04d}.txt"
-                    if filename_out.exists():
-                        existing_files.append(str(filename_out))
-            
-            if orphaned:
-                for msg in result['orphaned_messages']:
-                    filename_out = Path(output_dir) / f"Orphan-{msg['block']:04d}.txt"
-                    if filename_out.exists():
-                        existing_files.append(str(filename_out))
+            if use_json:
+                # JSON mode writes a single file
+                json_path = Path(output_dir) / (Path(filename).stem + '.json')
+                if json_path.exists():
+                    existing_files.append(str(json_path))
+            else:
+                if active:
+                    for i in range(1, len(result['active_messages']) + 1):
+                        filename_out = Path(output_dir) / f"Msg-{i:04d}.txt"
+                        if filename_out.exists():
+                            existing_files.append(str(filename_out))
+                
+                if deleted:
+                    for i in range(1, len(result['deleted_messages']) + 1):
+                        filename_out = Path(output_dir) / f"Deleted-{i:04d}.txt"
+                        if filename_out.exists():
+                            existing_files.append(str(filename_out))
+                
+                if orphaned:
+                    for msg in result['orphaned_messages']:
+                        filename_out = Path(output_dir) / f"Orphan-{msg['block']:04d}.txt"
+                        if filename_out.exists():
+                            existing_files.append(str(filename_out))
             
             if existing_files:
                 print(f"Error: The following files already exist:")
@@ -884,6 +1047,56 @@ def cmd_extract(filename, active=False, deleted=False, orphaned=False, output_di
         board_file = Path(filename).name
         board_name = boards.get(board_file)
     
+    # --- JSON output path ---
+    if use_json:
+        json_out = {
+            'analysis': build_analysis_json(result, filename, len(data)),
+        }
+        
+        def msg_to_json_fields(msg, msg_fmt):
+            """Prepare raw message text with To: line for email, then parse fields."""
+            message_text = msg['message']
+            if msg_fmt == 'email' and msg.get('user_info'):
+                message_text = f"To: {msg['user_info']['full_name']} (#{msg['user_id']})\n\n{message_text}"
+            elif msg_fmt == 'email':
+                message_text = f"To: User ID {msg['user_id']} (#{msg['user_id']})\n\n{message_text}"
+            return parse_message_fields(message_text, msg_fmt, board_name, board_file, msg.get('user_info'), users)
+        
+        if active:
+            json_out['active'] = []
+            for i, msg in enumerate(result['active_messages'], 1):
+                entry = msg_to_json_fields(msg, fmt)
+                entry['number'] = i
+                entry['block'] = msg.get('block')
+                if fmt == 'bulletin':
+                    entry['entry'] = msg.get('entry')
+                json_out['active'].append(entry)
+        
+        if deleted:
+            json_out['deleted'] = []
+            for i, msg in enumerate(result['deleted_messages'], 1):
+                entry = parse_message_fields(msg['message'], fmt, board_name, board_file, None, users)
+                entry['number'] = i
+                entry['block'] = msg.get('block')
+                json_out['deleted'].append(entry)
+        
+        if orphaned:
+            json_out['orphaned'] = []
+            for msg in result['orphaned_messages']:
+                entry = {'block': msg['block'], 'raw': msg['message']}
+                json_out['orphaned'].append(entry)
+        
+        json_str = json.dumps(json_out, indent=2, ensure_ascii=False)
+        
+        if output_dir:
+            json_path = Path(output_dir) / (Path(filename).stem + '.json')
+            with open(json_path, 'w') as f:
+                f.write(json_str)
+        else:
+            print(json_str)
+        return
+    
+    # --- Text output path ---
     # Extract active messages
     if active:
         if not output_dir:
@@ -986,11 +1199,11 @@ def cmd_extract(filename, active=False, deleted=False, orphaned=False, output_di
 
 def main():
     if len(sys.argv) < 2 or '--help' in sys.argv:
-        print("GBBS Pro Message Database Tool v1.1.0")
+        print("GBBS Pro Message Database Tool v1.2.0")
         print("2026-02-05, Brian J. Bernstein  (brian@dronefone.com)")
         print("\nUsage:")
-        print("  gbbsmsgtool.py analyze <msgdb_file>")
-        print("  gbbsmsgtool.py extract <msgdb_file> [--active] [--deleted] [--orphaned] [--all] [--output-dir <path>] [--users <users_file>] [--data2 <data2_file>] [--pretty] [--force]")
+        print("  gbbsmsgtool.py analyze <msgdb_file> [--json]")
+        print("  gbbsmsgtool.py extract <msgdb_file> [--active] [--deleted] [--orphaned] [--all] [--output-dir <path>] [--users <users_file>] [--data2 <data2_file>] [--pretty] [--json] [--force]")
         print("\nCommands:")
         print("  analyze    Show database statistics and block map")
         print("  extract    Extract messages from database")
@@ -1003,6 +1216,7 @@ def main():
         print("  --users        Path to USERS file (for email recipient names)")
         print("  --data2        Path to DATA2 file (for board names)")
         print("  --pretty       Format messages with readable headers (default: raw)")
+        print("  --json         Output in JSON format (ignores --pretty)")
         print("  --force        Overwrite existing files (default: abort if files exist)")
         sys.exit(1)
     
@@ -1026,7 +1240,8 @@ def main():
         if len(sys.argv) < 3:
             print("Error: analyze requires filename")
             sys.exit(1)
-        cmd_analyze(sys.argv[2], users_file)
+        use_json = '--json' in sys.argv
+        cmd_analyze(sys.argv[2], users_file, use_json)
     
     elif command == "extract":
         if len(sys.argv) < 3:
@@ -1040,6 +1255,7 @@ def main():
         all_types = '--all' in sys.argv
         force = '--force' in sys.argv
         pretty = '--pretty' in sys.argv
+        use_json = '--json' in sys.argv
         
         # Check if user specified what to extract
         if not (active or deleted or orphaned or all_types):
@@ -1056,7 +1272,7 @@ def main():
             if idx + 1 < len(sys.argv):
                 output_dir = sys.argv[idx + 1]
         
-        cmd_extract(filename, active, deleted, orphaned, output_dir, users_file, data2_file, force, pretty)
+        cmd_extract(filename, active, deleted, orphaned, output_dir, users_file, data2_file, force, pretty, use_json)
     
     else:
         print(f"Error: Unknown command '{command}'")

@@ -78,12 +78,12 @@ You can download the script from github [HERE](https://github.com/bernstbj/gbbs/
 
 Running the tool from the command-line without arguments will produce a help screen:
 ```
-GBBS Pro Message Database Tool v1.0.1
+GBBS Pro Message Database Tool v1.2.0
 2026-02-05, Brian J. Bernstein  (brian@dronefone.com)
 
 Usage:
-  gbbsmsgtool.py analyze <msgdb_file>
-  gbbsmsgtool.py extract <msgdb_file> [--active] [--deleted] [--orphaned] [--all] [--output-dir <path>] [--users <users_file>] [--data2 <data2_file>] [--pretty] [--force]
+  gbbsmsgtool.py analyze <msgdb_file> [--json]
+  gbbsmsgtool.py extract <msgdb_file> [--active] [--deleted] [--orphaned] [--all] [--output-dir <path>] [--users <users_file>] [--data2 <data2_file>] [--pretty] [--json] [--force]
 
 Commands:
   analyze    Show database statistics and block map
@@ -98,6 +98,7 @@ Extract options:
   --users        Path to USERS file (for email recipient names)
   --data2        Path to DATA2 file (for board names)
   --pretty       Format messages with readable headers (default: raw)
+  --json         Output in JSON format (ignores --pretty)
   --force        Overwrite existing files (default: abort if files exist)
 ```
 
@@ -197,7 +198,7 @@ By default, messages are extracted in "raw" format, preserving the original GBBS
 
 **Raw format** (default):
 ```
-ARRRGGHHH!!
+Hello World!!
 0,All
 1,Drone (#1)
 Date : 01/08/88  05:23:05 PM
@@ -208,7 +209,7 @@ Date : 01/08/88  05:23:05 PM
 **Pretty format** (with `--pretty`):
 ```
 Board: System News (B1)
-Subject: ARRRGGHHH!!
+Subject: Hello World!!
 To: All
 From: Drone (#1)
 Date : 01/08/88  05:23:05 PM
@@ -223,6 +224,88 @@ From: DRONE: THE OWNER AND SYSOP (#2-Shortround)
 This indicates user #2 (Shortround) posted using the alias "DRONE: THE OWNER AND SYSOP".
 
 **Note:** The pretty format parser is based on standard GBBS Pro message headers. If your BBS uses customized headers, you may need to modify the `prettify_message()` function in the tool (see comments in the code for customization points).
+
+#### JSON Format
+
+Use `--json` to output structured JSON instead of text. This is useful for programmatic consumption of the data. When `--json` is used, the `--pretty` flag is ignored since JSON output always includes parsed/structured fields.
+
+For `analyze`, the JSON output contains the database statistics:
+```
+bash> ./gbbsmsgtool.py analyze B1 --json
+```
+```json
+{
+  "source_file": "B1",
+  "format": "bulletin",
+  "file_size": 8200,
+  "bitmap_blocks": 2,
+  "directory_blocks": 4,
+  "used_data_blocks": 41,
+  "message_count": 9,
+  "total_blocks": 58,
+  "active_count": 9,
+  "deleted_count": 3,
+  "orphaned_count": 1,
+  "block_breakdown": {
+    "active_header": 9,
+    "active_chain": 32,
+    "deleted_header": 3,
+    "deleted_chain": 12,
+    "orphaned": 1,
+    "unused": 1
+  },
+  "usage_percent": 70.7
+}
+```
+
+For `extract`, the JSON output includes analysis stats plus arrays of messages with structured fields:
+```
+bash> ./gbbsmsgtool.py extract B1 --all --json
+```
+```json
+{
+  "analysis": { ... },
+  "active": [
+    {
+      "number": 1,
+      "entry": 0,
+      "block": 54,
+      "subject": "Hello World!!",
+      "to": "All",
+      "to_id": 0,
+      "from": "Drone",
+      "from_id": 1,
+      "from_alias": null,
+      "date": "01/08/88 05:23:05 PM",
+      "board": "System News",
+      "body": "message text here...",
+      "raw": "full raw message text"
+    }
+  ],
+  "deleted": [ ... ],
+  "orphaned": [ ... ]
+}
+```
+
+Each message object includes:
+- **subject, to, to_id, from, from_id**: Parsed header fields
+- **from_alias**: Real username if poster used an alias (requires USERS file), otherwise null
+- **date**: Parsed date string
+- **board**: Board name (requires DATA2 file), otherwise null
+- **body**: Message body text only
+- **raw**: Complete original message text as stored in the database
+- **number**: Message sequence number
+- **block**: Starting data block number
+- **entry**: Directory entry number (active bulletin messages only)
+
+When using `--output-dir` with `--json`, a single JSON file is written to the output directory, named after the input file (e.g., `B1.json` for input file `B1`):
+```
+bash> ./gbbsmsgtool.py extract B1 --all --json --output-dir out
+bash> ls out
+B1.json
+```
+
+**Note:** The JSON field parser is based on standard GBBS Pro message headers. If your BBS uses customized headers (e.g., "From->" instead of "From :"), you may need to modify the `parse_message_fields()` function in the tool (see `CUSTOMIZATION` comments in the code).
 
 Example usage:
 ```

@@ -566,12 +566,13 @@ Consolidated tool for analyzing and extracting messages from GBBS Pro message da
 - Prevents duplicate output of blocks used in deleted message chains
 - Reads actual directory size from header (not hardcoded)
 - Provides detailed diagnostic markers for incomplete chains
+- JSON output for programmatic consumption of analysis and message data
 
 #### Commands
 
 **analyze** - Display database statistics and block allocation map
 ```bash
-python3 gbbsmsgtool.py analyze <filename>
+python3 gbbsmsgtool.py analyze <filename> [--json]
 ```
 
 Shows:
@@ -616,6 +617,7 @@ python3 gbbsmsgtool.py extract <filename> <type> [options]
 - `--users <users_file>` - Path to USERS file (for email recipient names and alias detection)
 - `--data2 <data2_file>` - Path to DATA2 file (for board names)
 - `--pretty` - Format messages with readable headers (default: raw)
+- `--json` - Output in JSON format (ignores `--pretty`)
 - `--force` - Overwrite existing files (default: abort if files exist)
 
 **File Protection:**
@@ -640,6 +642,15 @@ python3 gbbsmsgtool.py extract B1 --all --data2 DATA2 --users USERS --pretty --o
 
 # Force overwrite existing files
 python3 gbbsmsgtool.py extract B5 --active --output-dir B5_messages --force
+
+# Extract as JSON to stdout
+python3 gbbsmsgtool.py extract B1 --all --json
+
+# Extract as JSON to output directory (writes B1.json)
+python3 gbbsmsgtool.py extract B1 --all --json --output-dir B1_messages
+
+# Analyze in JSON format
+python3 gbbsmsgtool.py analyze B1 --json
 ```
 
 #### DATA2 File Support
@@ -728,7 +739,7 @@ File timestamps are set to the 'Date:' timestamp from the message header when av
 Bulletin message with board name:
 ```
 Board: System News (B1)
-Subject: ARRRGGHHH!!
+Subject: Hello World!!
 To: All
 From: Drone (#1)
 Date : 01/08/88  05:23:05 PM
@@ -750,6 +761,75 @@ Date : 01/13/88  08:34:03 AM
 The format `(#2-Shortround)` indicates user #2 (Shortround) posted using the alias "DRONE: THE OWNER AND SYSOP".
 
 **Customization Note:** The pretty format parser is based on standard GBBS Pro message headers. If your BBS uses customized headers, modify the `prettify_message()` function in the tool (see code comments for customization points).
+
+**JSON format** (with `--json` flag): Outputs structured JSON with parsed message fields. When `--json` is used, `--pretty` is ignored since JSON always includes structured fields.
+
+For `analyze --json`, outputs database statistics:
+```json
+{
+  "source_file": "B1",
+  "format": "bulletin",
+  "file_size": 8200,
+  "bitmap_blocks": 2,
+  "directory_blocks": 4,
+  "used_data_blocks": 41,
+  "message_count": 9,
+  "total_blocks": 58,
+  "active_count": 9,
+  "deleted_count": 3,
+  "orphaned_count": 1,
+  "block_breakdown": {
+    "active_header": 9,
+    "active_chain": 32,
+    "deleted_header": 3,
+    "deleted_chain": 12,
+    "orphaned": 1,
+    "unused": 1
+  },
+  "usage_percent": 70.7
+}
+```
+
+For `extract --json`, outputs analysis plus message arrays:
+```json
+{
+  "analysis": { ... },
+  "active": [
+    {
+      "number": 1,
+      "entry": 0,
+      "block": 54,
+      "subject": "Hello World!!",
+      "to": "All",
+      "to_id": 0,
+      "from": "Drone",
+      "from_id": 1,
+      "from_alias": null,
+      "date": "01/08/88 05:23:05 PM",
+      "board": "System News",
+      "body": "message text here...",
+      "raw": "full raw message text"
+    }
+  ],
+  "deleted": [ ... ],
+  "orphaned": [ ... ]
+}
+```
+
+Each message object includes:
+- `subject`, `to`, `to_id`, `from`, `from_id`: Parsed header fields
+- `from_alias`: Real username if poster used an alias (requires USERS file), otherwise null
+- `date`: Parsed date string
+- `board`: Board name (requires DATA2 file), otherwise null
+- `body`: Message body text only
+- `raw`: Complete original message text as stored in the database
+- `number`: Message sequence number
+- `block`: Starting data block number
+- `entry`: Directory entry number (active bulletin messages only)
+
+When using `--output-dir` with `--json`, a single JSON file is written to the output directory, named after the input file (e.g., `B1.json` for input file `B1`).
+
+**JSON Customization Note:** The JSON field parser is based on standard GBBS Pro message headers. If your BBS uses customized headers (e.g., "From->" instead of "From :"), modify the `parse_message_fields()` function in the tool (see `CUSTOMIZATION` comments in the code).
 
 #### Message Type Categories
 
