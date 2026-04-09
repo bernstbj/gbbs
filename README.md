@@ -78,7 +78,7 @@ You can download the script from github [HERE](https://github.com/bernstbj/gbbs/
 
 Running the tool from the command-line without arguments will produce a help screen:
 ```
-GBBS Pro Message Database Tool v1.2.0
+GBBS Pro Message Database Tool v1.2.1
 2026-02-05, Brian J. Bernstein  (brian@dronefone.com)
 
 Usage:
@@ -326,6 +326,17 @@ total 104
 Note that the numbers used for active messages (`Msg-0000.txt`) correspond to their message number as they would exist in the BBS (since messages were referenced by number). Deleted messages, however, are simply a sequence in order of their discovery, but with an attempt to be chronological. Orphaned blocks' number refers to the block number it was found in.
 
 The timestamps of the extracted files are determined by the timestamp found within the message.
+
+## Sample Files
+
+If you don't have a GBBS Pro extract handy, I've provided a few files to let you at least try it out: B1, MAIL, USERS, and DATA2 files. So for example you can try:
+
+```
+bash> ./gbbsmsgtool.py extract B1 --all --pretty --users USERS --data2 DATA2
+```
+
+These files were created with GBBS Pro v2.1 on an emulator, with made-up users, and are soley for the purpose of demonstration. Any similarity to real people is purely coincidential.
+
 
 ## Questions, Comments, Support
 
