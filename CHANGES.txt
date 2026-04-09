@@ -1,3 +1,7 @@
+v1.2.1
+- Corrected directory entry to user ID mapping logic for MAIL handler.
+- Added sample B1, MAIL, USERS, DATA2 files.
+
 v1.2.0
 - Added --json flag for JSON output (analyze and extract).
 - JSON extract includes analysis stats plus structured message fields.

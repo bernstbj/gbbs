@@ -388,7 +388,7 @@ def scan_database_bulletin(data):
     }
 
 def scan_database_email(data, users=None):
-    """Scan email format database - directory entries map to user IDs.
+    """Scan email format database - directory entry N maps to User ID N+1.
     
     Args:
         data: Raw database file bytes
@@ -407,9 +407,9 @@ def scan_database_email(data, users=None):
     all_messages = []
     used_blocks = set()
     
-    # Each directory entry corresponds to a user ID
-    for user_id in range(max_entries):
-        entry_offset = dir_offset + (user_id * 4)
+    # Each directory entry corresponds to a user ID (entry N = User ID N+1)
+    for entry_index in range(max_entries):
+        entry_offset = dir_offset + (entry_index * 4)
         if entry_offset + 4 > len(data):
             break
         
@@ -420,6 +420,8 @@ def scan_database_email(data, users=None):
         block_num = struct.unpack('<H', entry[2:4])[0]
         if block_num == 0:
             continue
+        
+        user_id = entry_index + 1
         
         # Get user info if available
         user_info = users.get(user_id) if users else None
@@ -648,7 +650,7 @@ def cmd_analyze(filename, users_file=None, use_json=False):
         print(f"Blocks allocated: {len(result['allocated_blocks'])}")
         print(f"Blocks unused: {result['total_blocks'] - len(result['allocated_blocks'])}")
         print(f"Usage: {len(result['allocated_blocks']) / result['total_blocks'] * 100:.1f}%\n")
-        print(f"Email format: Directory entries map to user IDs")
+        print(f"Email format: Directory entry N maps to User ID N+1")
         print(f"Messages are EOT-separated (0x04) within user chains")
 
 def prettify_message(message_text, fmt, board_name=None, board_file=None, user_info=None, users=None):
@@ -1199,7 +1201,7 @@ def cmd_extract(filename, active=False, deleted=False, orphaned=False, output_di
 
 def main():
     if len(sys.argv) < 2 or '--help' in sys.argv:
-        print("GBBS Pro Message Database Tool v1.2.0")
+        print("GBBS Pro Message Database Tool v1.2.1")
         print("2026-02-05, Brian J. Bernstein  (brian@dronefone.com)")
         print("\nUsage:")
         print("  gbbsmsgtool.py analyze <msgdb_file> [--json]")

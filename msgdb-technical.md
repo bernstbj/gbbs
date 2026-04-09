@@ -53,7 +53,7 @@ Used for private email/mail databases (MAIL file)
 
 **Characteristics**:
 
-- Directory entries map to User IDs (entry N = User ID N)
+- Directory entries map to User IDs (entry N = User ID N+1; entry 0 appears unused?)
 - Each user has a chain of blocks containing all their messages
 - Messages within a user's chain are separated by EOT character (0x04)
 - Messages can span blocks via chain pointers (bytes 126-127)
@@ -137,14 +137,14 @@ Each directory entry is 4 bytes:
   - Used for block-chained reading
   - Zero value (0x0000) indicates empty/unused entry
   - **For bulletin format**: Points to message start block
-  - **For email format**: Points to first block of user's message chain (entry N = User ID N)
+  - **For email format**: Points to first block of user's message chain (entry N = User ID N+1)
 
 Empty entries are marked with `00 00 00 00`.
 
 **Important**: 
 
 - **Bulletin format**: Directory entries may point to continuation blocks or message fragments, not always complete message starts. The presence of a non-zero block number indicates the entry is "active" from the BBS perspective.
-- **Email format**: Directory entry N corresponds to User ID N. Non-zero entry means that user has messages.
+- **Email format**: Directory entry N corresponds to User ID N+1. Non-zero entry means that user has messages.
 
 ### Data Block Section
 
@@ -455,7 +455,7 @@ Hey, just testing the mail system...
 - **Date**: Line 4 - Timestamp in 12-hour format with AM/PM
 - **Body**: Remaining lines - Message content
 
-**Note**: Email messages do NOT have a "To" line in the stored data. The recipient is implicit - it's the user whose chain contains the message (directory entry N = User ID N). The gbbsmsgtool.py adds a "To:" line when extracting if the USERS file is provided.
+**Note**: Email messages do NOT have a "To" line in the stored data. The recipient is implicit - it's the user whose chain contains the message (directory entry N = User ID N+1). The gbbsmsgtool.py adds a "To:" line when extracting if the USERS file is provided.
 
 ## Known Issues and Limitations
 
@@ -836,7 +836,7 @@ When using `--output-dir` with `--json`, a single JSON file is written to the ou
 **Active Messages**: 
 
 - **Bulletin format**: Messages currently referenced in the directory. Extracted by following directory entries and their block chains.
-- **Email format**: All messages in user chains. Directory entry N = User ID N. Messages within each user's chain are separated by EOT (0x04).
+- **Email format**: All messages in user chains. Directory entry N = User ID N+1. Messages within each user's chain are separated by EOT (0x04).
 
 **Deleted Messages**: (Bulletin format only) Messages that have been removed from the directory but still have their header block (containing message start pattern) intact. These are complete messages that can be fully reconstructed by following their block chains through unused space.
 
@@ -877,7 +877,7 @@ Orphaned blocks are extracted by following their chain pointers as far as possib
 
 **Email Format - Active Messages**:
 
-1. Read directory entries (entry N = User ID N)
+1. Read directory entries (entry N = User ID N+1)
 2. For each non-zero entry, follow block chain pointers
 3. Decode 7-bit compressed data from complete chain
 4. Split on EOT (0x04) to extract individual messages
